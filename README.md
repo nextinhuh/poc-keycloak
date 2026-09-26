@@ -4,7 +4,7 @@
 
 Esta é uma POC pessoal (conta AWS pessoal do autor, fora da empresa) para validar, antes de propor formalmente para a empresa Barte, se o desenho de autenticação de terminais via **step-ca + Keycloak + ALB com listener mTLS** funciona de ponta a ponta:
 
-1. Um cliente pede um `access_token` ao backend, informando só um e-mail (o backend cria o usuário no Keycloak se necessário e emite o token).
+1. Um cliente (terminal POS) pede um `access_token` ao backend, informando o serial number do hardware (o backend cria o usuário-terminal no Keycloak se necessário, sem senha, e emite o token via token exchange).
 2. O cliente gera um CSR local e manda `{csr, access_token}` para o step-ca, que valida o token contra o Keycloak (provisioner OIDC) e, se válido, assina o CSR e devolve um certificado x509.
 3. O cliente usa esse certificado para chamar um endpoint do backend só acessível através de um listener **mTLS** do ALB (trust store = CA raiz do step-ca).
 
@@ -68,9 +68,11 @@ Os outros 2 repositórios (`poc-certificate`, `poc-backend`) **não sabem nem pr
 
 ## 6. Workflow de CI/CD (`.github/workflows/deploy.yml`)
 
-Em push na `main`: assume a IAM role via OIDC → cria o repositório ECR se não existir (`aws ecr describe-repositories || create-repository`, idempotente) → build/tag (`git short sha`)/push da imagem → resolve e bootstrapa (idempotente) o bucket S3 de state Terraform → `terraform init` (key `keycloak/terraform.tfstate`) → `terraform apply -auto-approve` passando `image_tag`, `allowed_admin_cidr` (via `TF_VAR_allowed_admin_cidr`) e `enable_mtls_listener`/`root_ca_bucket_name` (default `false`/`""` no push normal).
+Em push na `main`: assume a IAM role via OIDC → cria o repositório ECR se não existir (`aws ecr describe-repositories || create-repository`, idempotente) → build/tag (`git short sha`)/push da imagem → resolve e bootstrapa (idempotente) o bucket S3 de state Terraform → `terraform init` (key `keycloak/terraform.tfstate`) → `terraform apply -auto-approve` passando `image_tag`, `allowed_admin_cidr` (via `TF_VAR_allowed_admin_cidr`) e `enable_mtls_listener`/`root_ca_bucket_name`.
 
-Também aceita `workflow_dispatch` manual com os inputs `enable_mtls_listener` e `root_ca_bucket_name` — é assim que se faz a **"2ª leva"**: depois que o `poc-certificate` já rodou pelo menos uma vez e publicou o `root_ca.crt` no S3, rode manualmente este workflow (aba Actions → Run workflow) com `enable_mtls_listener=true` e `root_ca_bucket_name=<output do poc-certificate>`, para criar o trust store e o listener 8443.
+**Importante (bug real já vivido neste projeto, corrigido)**: `enable_mtls_listener`/`root_ca_bucket_name` **não podem depender só do input do `workflow_dispatch`** — em qualquer push normal na `main` (que é o gatilho do dia a dia), `github.event.inputs.*` vem vazio, e se o workflow só olhasse pra esse input, cada push comum reverteria o toggle pra `false` e **destruiria o listener 8443 + trust store** (foi exatamente o que aconteceu: um push de outra mudança apagou o listener mTLS sem ninguém pedir). A correção: o valor "real" fica guardado em **repo variables persistentes** (`vars.ENABLE_MTLS_LISTENER`, `vars.ROOT_CA_BUCKET_NAME`, Settings → Secrets and variables → Actions → Variables), e o workflow usa `github.event.inputs.X || vars.X || 'false'` — o input manual só serve pra *mudar* o valor persistido (rodando `workflow_dispatch` com um novo valor), não pra sustentá-lo a cada push.
+
+A **"2ª leva"** (depois que o `poc-certificate` já rodou pelo menos uma vez e publicou o `root_ca.crt` no S3) é: definir essas 2 variables no repositório (`ENABLE_MTLS_LISTENER=true`, `ROOT_CA_BUCKET_NAME=<output do poc-certificate>`) e então rodar o workflow uma vez (push ou `workflow_dispatch`) para criar o trust store e o listener 8443. Depois disso, qualquer push normal futuro mantém o listener no ar, porque o valor já está persistido.
 
 ## 7. Como testar isoladamente
 

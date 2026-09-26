@@ -77,8 +77,13 @@ jobs:
         working-directory: terraform
         env:
           TF_VAR_allowed_admin_cidr: ${{ vars.ALLOWED_ADMIN_CIDR }}
-          ENABLE_MTLS_LISTENER: ${{ github.event.inputs.enable_mtls_listener || 'false' }}
-          ROOT_CA_BUCKET_NAME: ${{ github.event.inputs.root_ca_bucket_name || '' }}
+          # Em push normal (nao workflow_dispatch), github.event.inputs.* vem
+          # vazio - por isso o estado "ligar o listener mTLS" precisa viver
+          # numa repo variable persistente (vars.ENABLE_MTLS_LISTENER), senao
+          # cada push comum reverte o toggle pra false e destroi o listener
+          # 8443 + trust store (bug real que ja aconteceu aqui).
+          ENABLE_MTLS_LISTENER: ${{ github.event.inputs.enable_mtls_listener || vars.ENABLE_MTLS_LISTENER || 'false' }}
+          ROOT_CA_BUCKET_NAME: ${{ github.event.inputs.root_ca_bucket_name || vars.ROOT_CA_BUCKET_NAME || '' }}
         run: |
           terraform apply -auto-approve \
             -var="aws_region=${AWS_REGION}" \
