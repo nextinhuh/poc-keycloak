@@ -43,7 +43,7 @@ jobs:
         env:
           TF_VAR_allowed_admin_cidr: ${{ vars.ALLOWED_ADMIN_CIDR }}
         run: |
-          terraform import \
+          terraform import -lock=false \
             -var="aws_region=${AWS_REGION}" \
             -var="image_tag=unused" \
             -var="enable_mtls_listener=true" \
