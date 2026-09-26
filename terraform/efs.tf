@@ -34,8 +34,16 @@ resource "aws_security_group" "keycloak_efs" {
   }
 }
 
-# Access point restrito - so expoe /opt/keycloak/data (H2 + realm), sem
-# acesso a mais nada no file system.
+# Access point restrito - so expoe /opt/keycloak/data (H2), sem acesso a
+# mais nada no file system.
+#
+# path = /keycloak-data-v2 (era /keycloak-data): o path antigo ficou com um
+# H2 num estado quebrado (schema criado, sem usuario admin persistido, sem
+# import automatico pra reprocessar) depois do incidente de 26/09. Como o
+# path do access point e imutavel, trocar o valor forca o Terraform a
+# recriar o access point - o EFS cria a pasta nova vazia no primeiro mount,
+# dando ao Keycloak um storage limpo pro boot nativo funcionar. Os dados
+# antigos ficam orfaos no mesmo file system (inofensivo).
 resource "aws_efs_access_point" "keycloak" {
   file_system_id = aws_efs_file_system.keycloak.id
 
@@ -45,7 +53,7 @@ resource "aws_efs_access_point" "keycloak" {
   }
 
   root_directory {
-    path = "/keycloak-data"
+    path = "/keycloak-data-v2"
     creation_info {
       owner_uid   = 1000
       owner_gid   = 1000
