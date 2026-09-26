@@ -87,8 +87,15 @@ resource "aws_ecs_task_definition" "keycloak" {
       }]
 
       environment = [
-        { name = "KC_BOOTSTRAP_ADMIN_USERNAME", value = "admin" },
-        { name = "KC_BOOTSTRAP_ADMIN_PASSWORD", value = "admin-poc-only" },
+        # NAO usar KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD aqui: o Keycloak tenta
+        # criar um admin "temporario" com esse username sempre que sobe, e
+        # isso colide com o usuario "admin" permanente ja definido em
+        # master-realm-override.json (credentials.temporary=false), fazendo
+        # o boot inteiro falhar (erro fatal, nao so um warning - validado
+        # localmente). POC_ADMIN_* e so o que o configure-token-exchange.sh
+        # usa pra logar; nao aciona nenhum mecanismo interno do Keycloak.
+        { name = "POC_ADMIN_USERNAME", value = "admin" },
+        { name = "POC_ADMIN_PASSWORD", value = "admin-poc-only" },
       ]
       logConfiguration = {
         logDriver = "awslogs"

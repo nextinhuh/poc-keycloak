@@ -1,5 +1,20 @@
 {
   "realm": "master",
   "enabled": true,
-  "sslRequired": "none"
+  "sslRequired": "none",
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "firstName": "Admin",
+      "lastName": "POC",
+      "email": "admin@poc-mtls.local",
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [
+        { "type": "password", "value": "admin-poc-only", "temporary": false }
+      ],
+      "realmRoles": ["admin"]
+    }
+  ]
 }

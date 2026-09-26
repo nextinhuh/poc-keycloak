@@ -31,8 +31,8 @@ echo "==> Keycloak pronto."
 ADMIN_TOKEN=$(curl -sS -X POST "${KC_URL}/realms/master/protocol/openid-connect/token" \
   -d "grant_type=password" \
   -d "client_id=admin-cli" \
-  -d "username=${KC_BOOTSTRAP_ADMIN_USERNAME}" \
-  -d "password=${KC_BOOTSTRAP_ADMIN_PASSWORD}" \
+  -d "username=${POC_ADMIN_USERNAME}" \
+  -d "password=${POC_ADMIN_PASSWORD}" \
   | jq -r .access_token)
 
 if [ -z "${ADMIN_TOKEN}" ] || [ "${ADMIN_TOKEN}" = "null" ]; then
@@ -55,10 +55,12 @@ fi
 echo "==> Habilitando fine-grained permissions no client ${BACKEND_CLIENT_ID}"
 CLIENT_PERMS=$(auth_put "${KC_URL}/admin/realms/${REALM}/clients/${BACKEND_UUID}/management/permissions" '{"enabled": true}')
 TOKEN_EXCHANGE_PERM_ID=$(echo "${CLIENT_PERMS}" | jq -r '.scopePermissions."token-exchange"')
+CLIENT_RESOURCE_ID=$(echo "${CLIENT_PERMS}" | jq -r '.resource')
 
 echo "==> Habilitando fine-grained permissions no recurso Users do realm"
 USERS_PERMS=$(auth_put "${KC_URL}/admin/realms/${REALM}/users-management-permissions" '{"enabled": true}')
 IMPERSONATE_PERM_ID=$(echo "${USERS_PERMS}" | jq -r '.scopePermissions.impersonate')
+USERS_RESOURCE_ID=$(echo "${USERS_PERMS}" | jq -r '.resource')
 
 echo "==> Garantindo a policy '${POLICY_NAME}' (client=${BACKEND_CLIENT_ID})"
 POLICY_ID=$(auth_get "${KC_URL}/admin/realms/${REALM}/clients/${REALM_MGMT_UUID}/authz/resource-server/policy/client?name=${POLICY_NAME}" \
@@ -75,15 +77,27 @@ fi
 
 attach_policy() {
   permission_id="$1"
-  label="$2"
+  resource_id="$2"
+  scope_name="$3"
+  label="$4"
+
+  # O GET desse endpoint NAO devolve o campo "policies" (fica num
+  # sub-recurso separado) - por isso montamos o corpo inteiro na mao em vez
+  # de tentar fazer merge em cima do que o GET retorna (bug ja vivido aqui:
+  # o PUT respondia 200 mas nao anexava nada de verdade).
   perm_json=$(auth_get "${KC_URL}/admin/realms/${REALM}/clients/${REALM_MGMT_UUID}/authz/resource-server/permission/scope/${permission_id}")
-  updated=$(echo "${perm_json}" | jq --arg pid "${POLICY_ID}" '.policies = ((.policies // []) + [$pid] | unique)')
+  body=$(echo "${perm_json}" | jq \
+    --arg pid "${POLICY_ID}" \
+    --arg rid "${resource_id}" \
+    --arg scope "${scope_name}" \
+    '. + {resources: [$rid], scopes: [$scope], policies: [$pid]}')
+
   auth_put "${KC_URL}/admin/realms/${REALM}/clients/${REALM_MGMT_UUID}/authz/resource-server/permission/scope/${permission_id}" \
-    "${updated}" >/dev/null
+    "${body}" >/dev/null
   echo "==> Policy anexada na permissao '${label}' (${permission_id})"
 }
 
-attach_policy "${TOKEN_EXCHANGE_PERM_ID}" "token-exchange (client ${BACKEND_CLIENT_ID})"
-attach_policy "${IMPERSONATE_PERM_ID}" "impersonate (Users)"
+attach_policy "${TOKEN_EXCHANGE_PERM_ID}" "${CLIENT_RESOURCE_ID}" "token-exchange" "token-exchange (client ${BACKEND_CLIENT_ID})"
+attach_policy "${IMPERSONATE_PERM_ID}" "${USERS_RESOURCE_ID}" "impersonate" "impersonate (Users)"
 
 echo "==> Configuracao de token-exchange concluida."
