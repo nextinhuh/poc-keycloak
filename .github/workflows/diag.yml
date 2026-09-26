@@ -16,17 +16,18 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Target health atual
+      - name: Tasks atuais (running e stopped) do keycloak
         run: |
-          TG_ARN=$(aws elbv2 describe-target-groups --names poc-mtls-keycloak-admin-tg --query 'TargetGroups[0].TargetGroupArn' --output text)
-          aws elbv2 describe-target-health --target-group-arn "$TG_ARN" --output json
+          echo "=== RUNNING ==="
+          ARNS=$(aws ecs list-tasks --cluster poc-mtls-ECS --family poc-mtls-keycloak --desired-status RUNNING --query 'taskArns' --output text)
+          [ -n "$ARNS" ] && aws ecs describe-tasks --cluster poc-mtls-ECS --tasks $ARNS \
+            --query 'tasks[].{td:taskDefinitionArn,lastStatus:lastStatus,healthStatus:healthStatus,createdAt:createdAt}' --output json
+          echo "=== STOPPED (mais recentes) ==="
+          ARNS=$(aws ecs list-tasks --cluster poc-mtls-ECS --family poc-mtls-keycloak --desired-status STOPPED --query 'taskArns' --output text)
+          [ -n "$ARNS" ] && aws ecs describe-tasks --cluster poc-mtls-ECS --tasks $ARNS \
+            --query 'tasks[].{td:taskDefinitionArn,stoppedAt:stoppedAt,stoppedReason:stoppedReason,exitCode:containers[0].exitCode}' --output json
 
-      - name: Service status
+      - name: Eventos recentes do service
         run: |
           aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
-            --query 'services[0].{running:runningCount,desired:desiredCount,deployments:deployments[].{td:taskDefinition,status:status,rollout:rolloutState}}' \
-            --output json
-
-      - name: SG antigo ainda existe?
-        run: |
-          aws ec2 describe-security-groups --group-ids sg-028a6208d34ea90e1 --output json 2>&1 || echo "SG NAO EXISTE MAIS (deletado com sucesso)"
+            --query 'services[0].events[:8]' --output json
