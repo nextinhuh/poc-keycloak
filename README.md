@@ -30,7 +30,7 @@ Todo esse fluxo (persistência EFS + script) foi **testado localmente com Docker
 
 Outro detalhe encontrado no teste local: o `GET` da permissão de fine-grained authz **não devolve o campo `policies`** (fica num sub-recurso `/associatedPolicies` separado) — por isso o script monta o corpo do `PUT` explicitamente (`resources`/`scopes`/`policies`) em vez de tentar fazer merge em cima do que o `GET` retorna.
 
-Não fica atrás do ALB — é acessado (a) para administração, via IP público da própria task, restrito ao IP do usuário; (b) pelos outros serviços (backend, step-ca), via **Cloud Map** (`keycloak.poc-mtls.local:8080`), porque o IP público muda a cada redeploy e um endereço fixo é obrigatório para não quebrar silenciosamente a integração.
+É acessado de duas formas, nenhuma delas por IP direto: (a) para administração (console + REST API), via um **listener dedicado do ALB compartilhado na porta 8081** (`http://<alb-dns-name>:8081`) — URL fixa, restrita ao `var.allowed_admin_cidr`, substitui o acesso direto por IP público da task (que mudava a cada redeploy — chegou a causar confusão real durante os testes); (b) pelos outros serviços (backend, step-ca), via **Cloud Map** (`keycloak.poc-mtls.local:8080`), pelo mesmo motivo de estabilidade de endereço.
 
 **b) Dono da infraestrutura compartilhada.** Como o ALB, o cluster ECS, os security groups e o namespace Cloud Map são usados pelos 3 serviços ao mesmo tempo (não só pelo Keycloak), alguém precisa criá-los no Terraform — e é este repositório quem faz isso, por ser o primeiro a subir na ordem de deploy (ver seção 6). Concretamente, além do Keycloak em si, este repositório também cria:
 - VPC lookup + subnets públicas (`network.tf`).
@@ -71,7 +71,8 @@ Os outros 2 repositórios (`poc-certificate`, `poc-backend`) **não sabem nem pr
 - `configure-token-exchange.sh`: espera o Keycloak responder, pega um token de admin (`KC_BOOTSTRAP_ADMIN_USERNAME`/`PASSWORD`), habilita fine-grained permissions no client `poc-backend` e no recurso `Users`, cria a policy `poc-backend-pode-exchange` e anexa nas permissões `token-exchange` e `impersonate` — via Admin REST API (`/management/permissions`, `/users-management-permissions`, `/authz/resource-server/policy/client`, `/authz/resource-server/permission/scope/{id}`).
 - `realm-export.json`: realm `poc-terminal` + os dois clients acima, com **secrets fixos hardcoded** (é uma POC descartável, não há necessidade de gerar secrets dinâmicos via provider Terraform do Keycloak — isso evitaria uma dependência circular entre "terraform falar com o Keycloak" e "Keycloak já estar no ar"). Inclui também o service-account user de `poc-backend` com os client roles `realm-management: manage-users, view-users, query-users` (necessário pra ele poder criar usuários via Admin API).
 - `terraform/efs.tf`, `iam.tf`: file system + access point restrito a `/opt/keycloak/data` + task role própria (EFS IAM authorization exige uma task role separada da execution role — mesmo ajuste já feito no `poc-certificate`).
-- `terraform/ecs.tf`: volume EFS montado na task definition, security group de admin (porta 8080, `cidr_blocks = [var.allowed_admin_cidr]`), registro no Cloud Map (`aws_service_discovery_service`), os 2 `aws_ssm_parameter` (`SecureString`) publicando os **mesmos** secrets hardcoded do `realm-export.json` (mantidos em sincronia manual — se mudar um, muda o outro), task definition + service ECS (`assign_public_ip = true`, `desired_count = 1`, circuit breaker habilitado).
+- `terraform/ecs.tf`: volume EFS montado na task definition, target group `keycloak-admin-tg` (porta 8080, health check em `/realms/master/.well-known/openid-configuration`), registro no Cloud Map (`aws_service_discovery_service`), os 2 `aws_ssm_parameter` (`SecureString`) publicando os **mesmos** secrets hardcoded do `realm-export.json` (mantidos em sincronia manual — se mudar um, muda o outro), task definition + service ECS (`assign_public_ip = true` — só pra egress, já que não há NAT Gateway; ninguém acessa a task direto por esse IP, o security group só libera tráfego vindo do ALB — `desired_count = 1`, circuit breaker habilitado).
+- `terraform/alb.tf`: listener dedicado `keycloak_admin` na porta 8081 do ALB compartilhado, `default_action` sempre forward pro target group do Keycloak (sem regra de path — o Keycloak usa muitos subpaths distintos, `/admin/*`, `/realms/*`, `/resources/*`, etc., então uma porta dedicada é mais simples/robusta que listar cada path como regra no listener 80 compartilhado).
 - `terraform/network.tf`, `cluster.tf`, `security-groups.tf`, `service-discovery.tf`, `alb.tf`: a infraestrutura compartilhada descrita na seção 2b. O `alb.tf` tem o listener 8443 (mTLS) e o `aws_lb_trust_store` condicionados a `var.enable_mtls_listener` (`count = var.enable_mtls_listener ? 1 : 0`) — ficam desligados até a "2ª leva" (seção 6).
 - `terraform/data.tf`: só o lookup do próprio ECR repo (criado via AWS CLI na pipeline, não via `aws_ecr_repository` — evita o problema de ordem "terraform cria o repo" vs "pipeline precisa do repo antes de buildar a imagem"). Os outros recursos (VPC, subnets, cluster, ALB, SGs, Cloud Map) deixaram de ser `data` source aqui porque agora são criados neste mesmo repositório como `resource`.
 
@@ -92,16 +93,19 @@ A **"2ª leva"** (depois que o `poc-certificate` já rodou pelo menos uma vez e 
 ## 7. Como testar isoladamente
 
 ```bash
-# depois que a pipeline rodar, pegar o IP público da task:
-aws ecs list-tasks --cluster poc-mtls-ECS --service-name poc-mtls-keycloak
-# describe-tasks -> network interface -> IP publico
+# depois que a pipeline rodar, usar o DNS name do ALB compartilhado (fixo,
+# nao muda entre deploys) - saida do output alb_dns_name deste repositorio:
+ALB_DNS="<output alb_dns_name>"
 
-curl -i http://<ip-publico>:8080/realms/poc-terminal/.well-known/openid-configuration
+curl -i "http://${ALB_DNS}:8081/realms/poc-terminal/.well-known/openid-configuration"
 # esperado: 200 com o JSON de configuracao OIDC do realm poc-terminal
 
-curl -X POST http://<ip-publico>:8080/realms/poc-terminal/protocol/openid-connect/token \
+curl -X POST "http://${ALB_DNS}:8081/realms/poc-terminal/protocol/openid-connect/token" \
   -d "grant_type=client_credentials&client_id=poc-backend&client_secret=poc-backend-secret-CHANGE-ME-not-sensitive-test-only"
 # esperado: 200 com um access_token de service account
+
+# console admin:
+open "http://${ALB_DNS}:8081/admin/master/console/"
 ```
 
 ## 8. Fora de escopo

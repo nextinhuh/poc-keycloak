@@ -69,6 +69,24 @@ resource "aws_lb_listener" "mtls" {
   }
 }
 
+# Listener dedicado (8081, HTTP puro) so pro console/API admin do Keycloak -
+# mesma ideia de path/porta fixa que o backend e o step-ca ja usam no
+# listener 80, mas numa porta separada porque o Keycloak precisa de varios
+# paths (/admin/*, /realms/*, /resources/*, /js/*...) e seria mais fragil
+# tentar listar cada um como regra de path no listener 80 compartilhado.
+# Substitui o acesso direto por IP publico da task (que mudava a cada
+# redeploy) - agora e uma URL fixa: http://<alb-dns-name>:8081.
+resource "aws_lb_listener" "keycloak_admin" {
+  load_balancer_arn = aws_lb.shared.arn
+  port              = 8081
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.keycloak_admin.arn
+  }
+}
+
 resource "tls_private_key" "mtls_listener" {
   count       = var.enable_mtls_listener ? 1 : 0
   algorithm   = "RSA"

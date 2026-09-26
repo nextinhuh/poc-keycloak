@@ -19,6 +19,14 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    description = "Console/API admin do Keycloak (substitui o acesso direto por IP publico da task)"
+    from_port   = 8081
+    to_port     = 8081
+    protocol    = "tcp"
+    cidr_blocks = [var.allowed_admin_cidr]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -51,10 +59,6 @@ resource "aws_security_group" "ecs_tasks" {
     protocol    = "tcp"
     self        = true
   }
-
-  # A porta admin do Keycloak (8080) e liberada explicitamente para o IP do
-  # usuario no security group proprio do poc-keycloak (nao aqui), porque o
-  # CIDR do usuario e conhecido só naquele repositorio (var.allowed_admin_cidr).
 
   egress {
     from_port   = 0

@@ -1,24 +1,3 @@
-resource "aws_security_group" "keycloak_admin" {
-  name        = "${var.project_name}-keycloak-admin-sg"
-  description = "Acesso admin ao console Keycloak (8080), restrito ao IP do usuario"
-  vpc_id      = data.aws_vpc.default.id
-
-  ingress {
-    description = "Console admin Keycloak"
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_admin_cidr]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
 resource "aws_service_discovery_service" "keycloak" {
   name = "keycloak"
 
@@ -109,6 +88,18 @@ resource "aws_ecs_task_definition" "keycloak" {
   ])
 }
 
+resource "aws_lb_target_group" "keycloak_admin" {
+  name        = "${var.project_name}-keycloak-admin-tg"
+  port        = 8080
+  protocol    = "HTTP"
+  vpc_id      = data.aws_vpc.default.id
+  target_type = "ip"
+
+  health_check {
+    path = "/realms/master/.well-known/openid-configuration"
+  }
+}
+
 resource "aws_ecs_service" "keycloak" {
   name            = "${var.project_name}-keycloak"
   cluster         = aws_ecs_cluster.this.arn
@@ -117,9 +108,19 @@ resource "aws_ecs_service" "keycloak" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = data.aws_subnets.public.ids
-    security_groups  = [aws_security_group.ecs_tasks.id, aws_security_group.keycloak_admin.id]
+    subnets = data.aws_subnets.public.ids
+    # Sem assign_public_ip=true a task nao teria saida pra internet (nao ha
+    # NAT Gateway nesta POC) e falharia ao puxar a imagem do ECR - o IP
+    # publico continua existindo, mas ninguem acessa mais direto por ele: o
+    # security group so libera trafego vindo do ALB (aws_security_group.ecs_tasks).
+    security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.keycloak_admin.arn
+    container_name    = "keycloak"
+    container_port    = 8080
   }
 
   service_registries {
@@ -130,8 +131,14 @@ resource "aws_ecs_service" "keycloak" {
     enable   = true
     rollback = true
   }
+
+  depends_on = [aws_lb_listener.keycloak_admin]
 }
 
 output "keycloak_internal_url" {
   value = "http://keycloak.${aws_service_discovery_private_dns_namespace.this.name}:8080"
+}
+
+output "keycloak_admin_url" {
+  value = "http://${aws_lb.shared.dns_name}:8081"
 }
