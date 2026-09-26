@@ -30,6 +30,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # DEBUG TEMPORARIO - remover depois de diagnosticar o erro de OIDC.
+      # So imprime sub/aud do token (nao e segredo), pra comparar com a trust
+      # policy da IAM role.
+      - name: Debug - decode OIDC token claims
+        run: |
+          RESPONSE=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          JWT=$(echo "$RESPONSE" | jq -r .value)
+          echo "$JWT" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{sub, aud, iss}'
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
