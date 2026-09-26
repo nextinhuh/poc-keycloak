@@ -48,15 +48,4 @@ jobs:
       - name: Terraform force-unlock (lock orfao de cancelamentos anteriores)
         working-directory: terraform
         continue-on-error: true
-        run: terraform force-unlock -force 788f1258-3b5c-5fea-60af-133c14267c9a
-
-      - name: Terraform apply -target=aws_ecs_service.keycloak
-        working-directory: terraform
-        env:
-          TF_VAR_allowed_admin_cidr: ${{ vars.ALLOWED_ADMIN_CIDR }}
-        run: |
-          terraform apply -auto-approve -target=aws_ecs_service.keycloak \
-            -var="aws_region=${AWS_REGION}" \
-            -var="image_tag=ae79bd81" \
-            -var="enable_mtls_listener=true" \
-            -var="root_ca_bucket_name=poc-mtls-root-ca-273164497089"
+        run: terraform force-unlock -force 373d77c1-96ae-eccb-5dbc-78fd354d4a7a
