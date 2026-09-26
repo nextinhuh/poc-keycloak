@@ -94,6 +94,13 @@ resource "aws_lb_target_group" "keycloak_admin" {
   vpc_id      = data.aws_vpc.default.id
   target_type = "ip"
 
+  # Default da AWS e 300s. Como o deploy so sobe a task nova depois da antiga
+  # sair completamente do TG (deployment_maximum_percent=100, ver
+  # aws_ecs_service.keycloak), 300s de deregistration_delay = ate 5min de
+  # indisponibilidade a cada deploy. Console admin de baixo trafego nesta
+  # POC nao precisa de uma janela de drain longa.
+  deregistration_delay = "10"
+
   health_check {
     path = "/realms/master/.well-known/openid-configuration"
   }
