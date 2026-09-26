@@ -16,18 +16,24 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: ECS service network config + rollout
+      - name: Todos os deployments do service
         run: |
           aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
-            --query 'services[0].{status:status,running:runningCount,desired:desiredCount,taskDef:taskDefinition,networkConfig:deployments[0].networkConfiguration,rollout:deployments[0].rolloutState}' \
-            --output json
+            --query 'services[0].deployments' --output json
 
-      - name: Target group health (keycloak-admin-tg)
+      - name: Todas as tasks (running e stopped) com detalhe
+        run: |
+          for status in RUNNING STOPPED; do
+            echo "=== $status ==="
+            ARNS=$(aws ecs list-tasks --cluster poc-mtls-ECS --service-name poc-mtls-keycloak --desired-status $status --query 'taskArns' --output text)
+            if [ -n "$ARNS" ]; then
+              aws ecs describe-tasks --cluster poc-mtls-ECS --tasks $ARNS \
+                --query 'tasks[].{taskArn:taskArn,lastStatus:lastStatus,desiredStatus:desiredStatus,stoppedReason:stoppedReason,taskDefinition:taskDefinitionArn,eni:attachments[0].details[?name==`networkInterfaceId`].value|[0]}' \
+                --output json
+            fi
+          done
+
+      - name: Target group inteiro (todos os targets, nao so o primeiro)
         run: |
           TG_ARN=$(aws elbv2 describe-target-groups --names poc-mtls-keycloak-admin-tg --query 'TargetGroups[0].TargetGroupArn' --output text)
           aws elbv2 describe-target-health --target-group-arn "$TG_ARN" --output json
-
-      - name: ENIs no security group antigo (deveria estar vazio agora)
-        run: |
-          aws ec2 describe-network-interfaces --filters Name=group-id,Values=sg-028a6208d34ea90e1 \
-            --query 'NetworkInterfaces[].{Id:NetworkInterfaceId,Status:Status}' --output json
