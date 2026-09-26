@@ -156,10 +156,14 @@ Ainda em `Clients → realm-management → Authorization → sub-aba Permissions
 | `token-exchange.permission.client.<uuid-do-poc-backend>` | Quem pode fazer token-exchange usando o client `poc-backend` como `subject_token` | **Sim** |
 | `admin-impersonating.permission.users` | Quem pode impersonar (virar) outro usuário via token-exchange (`requested_subject`) | **Sim** — esse é o "impersonate" de verdade |
 | `user-impersonated.permission.users` | Controla o usuário-**alvo** sendo impersonado (não quem impersona) | **Não** — é fácil confundir com o de cima pelo nome parecido; anexar a policy aqui **não resolve** o erro `Client not allowed to exchange` |
+| `view.permission.users` | Quem pode fazer `GET` de usuários via Admin API (`findUserIdByUsername` do backend) | **Sim** |
+| `manage.permission.users` | Quem pode criar/editar usuários via Admin API (`createUser` do backend) | **Sim** |
 
-Pra cada uma das duas permissões corretas: abrir → **Apply Policy**/"Associated policies" → adicionar `poc-backend-pode-exchange` → Save.
+Pra cada uma das permissões marcadas "Sim": abrir → **Apply Policy**/"Associated policies" → adicionar `poc-backend-pode-exchange` → Save.
 
-> **Pegadinha real encontrada nesta POC**: da primeira vez, a policy foi anexada em `user-impersonated` em vez de `admin-impersonating` — o teste de token-exchange continuou dando `{"error":"access_denied","error_description":"Client not allowed to exchange"}` até corrigir pra permissão certa. Se você bater nesse erro depois de seguir os passos acima, é o primeiro lugar pra conferir.
+> **Pegadinha real #1**: da primeira vez, a policy foi anexada em `user-impersonated` em vez de `admin-impersonating` — o teste de token-exchange continuou dando `{"error":"access_denied","error_description":"Client not allowed to exchange"}` até corrigir pra permissão certa. Se você bater nesse erro depois de seguir os passos acima, é o primeiro lugar pra conferir.
+
+> **Pegadinha real #2 (a mais fácil de esquecer)**: ligar "Permissions enabled" em Users (passo 8.5) **muda o modelo de autorização de todo o resource type Users** — a partir daí, os client roles `view-users`/`manage-users`/`query-users` do service account do backend (passo 8.3) **deixam de bastar sozinhos**. Sem policy anexada em `view.permission.users`/`manage.permission.users`, toda chamada do backend pra `GET/POST /admin/realms/poc-terminal/users` (usada em `/auth/token` pra achar/criar o usuário-terminal) recebe **403 Forbidden**, e como o `poc-backend` não usa Spring Security, isso vira um **500 Internal Server Error** cru pro cliente que chamou `/auth/token` — sem nenhuma pista do motivo real na resposta HTTP (só aparece no log do container, `HttpClientErrorException$Forbidden` em `KeycloakService.findUserIdByUsername`). Se `/auth/token` der 500, confira estas duas permissões antes de qualquer outra coisa.
 
 ### 8.8 Criar os usuários-terminal
 
@@ -188,6 +192,15 @@ curl -s -X POST "http://${ALB_DNS}:8081/realms/poc-terminal/protocol/openid-conn
 ```
 Esperado: `200` com `id_token`/`access_token` do usuário `teste-001`.
 
+Teste equivalente, mas batendo direto no endpoint real do `poc-backend` (cobre também `view`/`manage.permission.users`, já que esse endpoint cria o usuário se ele não existir):
+
+```bash
+curl -X POST "http://${ALB_DNS}/auth/token" \
+  -H "Content-Type: application/json" \
+  -d '{"serialNumber": "teste-001"}'
+```
+Esperado: `200` com `{"accessToken": "..."}`. Um `500` aqui, sem mais contexto na resposta, é quase sempre falta de policy em `view`/`manage.permission.users` (ver pegadinha #2 do passo 8.7) — confirme sempre no log do container (`/ecs/poc-mtls-backend`) antes de investigar outra coisa.
+
 ### 8.10 Checklist rápido pra replicar na empresa
 
 - [ ] Servidor sobe com `--features=token-exchange,admin-fine-grained-authz`
@@ -197,7 +210,7 @@ Esperado: `200` com `id_token`/`access_token` do usuário `teste-001`.
 - [ ] Secrets dos 2 clients sincronizados com onde quer que a infra os leia (SSM/Vault/etc.)
 - [ ] Permissions enabled: no client do backend **e** em Users
 - [ ] Policy do tipo Client, liberando o client do backend
-- [ ] Policy anexada em `token-exchange.permission.client.<uuid>` **e** em `admin-impersonating.permission.users` (não `user-impersonated`)
+- [ ] Policy anexada em `token-exchange.permission.client.<uuid>`, `admin-impersonating.permission.users` (não `user-impersonated`), **e** em `view.permission.users`/`manage.permission.users`
 - [ ] Usuário de teste criado antes de testar o token-exchange
 - [ ] Teste de ponta a ponta (8.9) retornando 200
 
