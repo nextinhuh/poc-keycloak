@@ -66,15 +66,25 @@ resource "aws_ecs_task_definition" "keycloak" {
       }]
 
       environment = [
-        # NAO usar KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD aqui: o Keycloak tenta
-        # criar um admin "temporario" com esse username sempre que sobe, e
-        # isso colide com o usuario "admin" permanente ja definido em
-        # master-realm-override.json (credentials.temporary=false), fazendo
-        # o boot inteiro falhar (erro fatal, nao so um warning - validado
-        # localmente). POC_ADMIN_* e so o que o configure-token-exchange.sh
-        # usa pra logar; nao aciona nenhum mecanismo interno do Keycloak.
+        # NAO usar KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD junto com --import-realm:
+        # o Keycloak tenta criar um admin "temporario" com esse username sempre
+        # que sobe, e isso colide com o usuario "admin" permanente definido em
+        # master-realm-override.json (credentials.temporary=false), fazendo o
+        # boot inteiro falhar (erro fatal, nao so um warning - validado
+        # localmente). POC_ADMIN_* e so o que o configure-token-exchange.sh usa
+        # pra logar; nao aciona nenhum mecanismo interno do Keycloak.
         { name = "POC_ADMIN_USERNAME", value = "admin" },
         { name = "POC_ADMIN_PASSWORD", value = "admin-poc-only" },
+        # FIX TEMPORARIO (26/09): o volume EFS ja tem o marcador de
+        # "inicializado" de um boot anterior ao ajuste do master-realm-override
+        # (sslRequired/enabled), entao --import-realm nunca mais rodou e o
+        # master realm ficou sem nenhum admin (console pede "Local access
+        # required"). Sem --import-realm nesta execucao, nao ha o conflito
+        # descrito acima - estas duas vars sao seguras AGORA. Remover depois
+        # que o login for confirmado, para nao arriscar o mesmo conflito caso o
+        # volume seja reinicializado no futuro (ver README).
+        { name = "KC_BOOTSTRAP_ADMIN_USERNAME", value = "admin" },
+        { name = "KC_BOOTSTRAP_ADMIN_PASSWORD", value = "admin-poc-only" },
       ]
       logConfiguration = {
         logDriver = "awslogs"
