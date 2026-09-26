@@ -45,7 +45,7 @@ resource "aws_security_group" "ecs_tasks" {
   }
 
   ingress {
-    description = "Comunicacao interna entre tasks via Cloud Map (ex.: backend/step-ca -> keycloak:8080)"
+    description = "Comunicacao interna entre tasks via Cloud Map (ex.: backend/step-ca chamando keycloak:8080)"
     from_port   = 0
     to_port     = 65535
     protocol    = "tcp"
