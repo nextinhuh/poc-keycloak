@@ -1,0 +1,45 @@
+name: unlock
+
+on:
+  workflow_dispatch:
+    inputs:
+      lock_id:
+        description: "Lock ID a forcar destravamento"
+        type: string
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  TF_STATE_BUCKET_PREFIX: poc-mtls-tfstate
+
+jobs:
+  unlock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+      - name: Resolve state bucket name
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "TF_STATE_BUCKET=${TF_STATE_BUCKET_PREFIX}-${ACCOUNT_ID}" >> "$GITHUB_ENV"
+      - name: Terraform init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=keycloak/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
+      - name: Force unlock
+        working-directory: terraform
+        env:
+          LOCK_ID: ${{ github.event.inputs.lock_id }}
+        run: terraform force-unlock -force "${LOCK_ID}"
