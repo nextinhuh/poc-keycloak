@@ -40,6 +40,13 @@ jobs:
 
       - name: Importar o listener 8443 (ja existe na AWS, faltava no state)
         working-directory: terraform
+        env:
+          TF_VAR_allowed_admin_cidr: ${{ vars.ALLOWED_ADMIN_CIDR }}
         run: |
-          terraform import 'aws_lb_listener.mtls[0]' \
+          terraform import \
+            -var="aws_region=${AWS_REGION}" \
+            -var="image_tag=unused" \
+            -var="enable_mtls_listener=true" \
+            -var="root_ca_bucket_name=poc-mtls-root-ca-273164497089" \
+            'aws_lb_listener.mtls[0]' \
             arn:aws:elasticloadbalancing:us-east-1:273164497089:listener/app/poc-mtls-shared-alb/930aff2f68543987/4d8e98389d22b013
