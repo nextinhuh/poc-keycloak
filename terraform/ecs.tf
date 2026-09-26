@@ -133,6 +133,12 @@ resource "aws_ecs_service" "keycloak" {
     container_port    = 8080
   }
 
+  # Sem isso (default 0) o ALB comeca a checar o health antes do Keycloak
+  # terminar de subir (~114s medidos em PRD: augmentation do Quarkus + boot
+  # do Infinispan) e o health check unhealthy threshold (3 x 30s = 90s) mata
+  # a task antes dela ficar pronta - crash-loop observado em 26/09.
+  health_check_grace_period_seconds = 180
+
   service_registries {
     registry_arn = aws_service_discovery_service.keycloak.arn
   }
