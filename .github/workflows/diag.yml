@@ -16,21 +16,20 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: ENIs no SG antigo (com detalhe completo)
+      - name: Qual task tem essa ENI (eni-0e2af6d923432dff7)
         run: |
-          aws ec2 describe-network-interfaces --filters Name=group-id,Values=sg-028a6208d34ea90e1 --output json
+          aws ecs list-tasks --cluster poc-mtls-ECS --query 'taskArns' --output text | tr '\t' '\n' > /tmp/all-tasks.txt
+          cat /tmp/all-tasks.txt
+          echo "--- detalhe de cada uma ---"
+          while read -r t; do
+            [ -z "$t" ] && continue
+            aws ecs describe-tasks --cluster poc-mtls-ECS --tasks "$t" \
+              --query 'tasks[0].{taskArn:taskArn,group:group,lastStatus:lastStatus,taskDefinition:taskDefinitionArn,eni:attachments[0].details[?name==`networkInterfaceId`].value|[0]}' \
+              --output json
+          done < /tmp/all-tasks.txt
 
-      - name: Outros security groups que referenciam o antigo como origem
+      - name: Network config atual do service keycloak
         run: |
-          aws ec2 describe-security-groups \
-            --filters "Name=egress.ip-permission.group-id,Values=sg-028a6208d34ea90e1" \
+          aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
+            --query 'services[0].{taskDef:taskDefinition,networkConfig:networkConfiguration,deployments:deployments[].{td:taskDefinition,desired:desiredCount,running:runningCount,status:status}}' \
             --output json
-          aws ec2 describe-security-groups \
-            --filters "Name=ip-permission.group-id,Values=sg-028a6208d34ea90e1" \
-            --output json
-
-      - name: Listeners existentes no ALB
-        run: |
-          ALB_ARN=$(aws elbv2 describe-load-balancers --names poc-mtls-shared-alb --query 'LoadBalancers[0].LoadBalancerArn' --output text)
-          echo "ALB: $ALB_ARN"
-          aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" --output json
