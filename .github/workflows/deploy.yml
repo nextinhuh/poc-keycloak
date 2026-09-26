@@ -1,8 +1,7 @@
 name: deploy
 
 on:
-  push:
-    branches: [main]
+  # push desligado ate terminar de diagnosticar o loop de rollback (ver diag.yml)
   workflow_dispatch:
     inputs:
       enable_mtls_listener:
