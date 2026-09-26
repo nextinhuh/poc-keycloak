@@ -107,6 +107,16 @@ resource "aws_ecs_service" "keycloak" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
+  # O Keycloak usa H2 em arquivo, montado no MESMO EFS de todas as tasks (nao
+  # e um DB de verdade com controle de concorrencia entre processos). Rolling
+  # deployment padrao (min=100%/max=200%) sobe a task nova ANTES de derrubar
+  # a antiga - as duas tentam abrir o mesmo keycloakdb.mv.db ao mesmo tempo,
+  # a nova trava com "the file is locked" e nunca fica saudavel. Configurando
+  # min=0/max=100 forca o ECS a parar a task antiga primeiro (~alguns
+  # segundos de indisponibilidade a cada deploy, aceitavel numa POC pessoal).
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
+
   network_configuration {
     subnets = data.aws_subnets.public.ids
     # Sem assign_public_ip=true a task nao teria saida pra internet (nao ha
