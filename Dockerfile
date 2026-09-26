@@ -8,4 +8,7 @@ COPY master-realm-override.json /opt/keycloak/data/import/master-realm-override.
 # start-dev usa H2 embarcado (sem Postgres) - decisao explicita da POC, sem
 # banco de dados persistente. --import-realm cria o realm poc-terminal (e os
 # clients poc-backend / step-ca-oidc) automaticamente no boot.
-ENTRYPOINT ["/opt/keycloak/bin/kc.sh", "start-dev", "--import-realm", "--http-enabled=true", "--hostname-strict=false"]
+# --features=token-exchange,admin-fine-grained-authz: sem isso, as telas de
+# permissao (Users -> Permissions, Clients -> Advanced -> Permissions) nem
+# aparecem no console, e o grant_type token-exchange e recusado pelo servidor.
+ENTRYPOINT ["/opt/keycloak/bin/kc.sh", "start-dev", "--import-realm", "--http-enabled=true", "--hostname-strict=false", "--features=token-exchange,admin-fine-grained-authz"]
