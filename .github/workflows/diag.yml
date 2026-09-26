@@ -16,10 +16,18 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Task definition atual em uso pelo service (imagem)
+      - name: ECS service network config + rollout
         run: |
-          TD_ARN=$(aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
-            --query 'services[0].taskDefinition' --output text)
-          echo "task definition: $TD_ARN"
-          aws ecs describe-task-definition --task-definition "$TD_ARN" \
-            --query 'taskDefinition.containerDefinitions[0].image' --output text
+          aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
+            --query 'services[0].{status:status,running:runningCount,desired:desiredCount,taskDef:taskDefinition,networkConfig:deployments[0].networkConfiguration,rollout:deployments[0].rolloutState}' \
+            --output json
+
+      - name: Target group health (keycloak-admin-tg)
+        run: |
+          TG_ARN=$(aws elbv2 describe-target-groups --names poc-mtls-keycloak-admin-tg --query 'TargetGroups[0].TargetGroupArn' --output text)
+          aws elbv2 describe-target-health --target-group-arn "$TG_ARN" --output json
+
+      - name: ENIs no security group antigo (deveria estar vazio agora)
+        run: |
+          aws ec2 describe-network-interfaces --filters Name=group-id,Values=sg-028a6208d34ea90e1 \
+            --query 'NetworkInterfaces[].{Id:NetworkInterfaceId,Status:Status}' --output json
