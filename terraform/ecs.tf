@@ -117,13 +117,6 @@ resource "aws_ecs_service" "keycloak" {
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
 
-  # O boot do Keycloak (Quarkus augmentation + import do realm) leva bem mais
-  # que os ~60s padrao que o ECS da antes de matar a task por falha no health
-  # check do ALB (unhealthy_threshold=2 x interval=30s) - ele fica sendo morto
-  # (exitCode 137) no meio do boot, antes de ter chance de ficar saudavel.
-  # 180s da folga suficiente mesmo no boot mais lento ja observado (~90s).
-  health_check_grace_period_seconds = 180
-
   network_configuration {
     subnets = data.aws_subnets.public.ids
     # Sem assign_public_ip=true a task nao teria saida pra internet (nao ha
