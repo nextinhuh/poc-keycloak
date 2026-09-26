@@ -1,0 +1,41 @@
+name: diag
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: ECS service status
+        run: |
+          aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
+            --query 'services[0].{status:status,desiredCount:desiredCount,runningCount:runningCount,pendingCount:pendingCount,deployments:deployments}' \
+            --output json
+
+      - name: ECS service events (ultimos 20)
+        run: |
+          aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
+            --query 'services[0].events[:20]' --output json
+
+      - name: Tasks do servico (todas, incluindo STOPPED)
+        run: |
+          echo "--- RUNNING ---"
+          aws ecs list-tasks --cluster poc-mtls-ECS --service-name poc-mtls-keycloak --desired-status RUNNING --output json
+          echo "--- STOPPED ---"
+          aws ecs list-tasks --cluster poc-mtls-ECS --service-name poc-mtls-keycloak --desired-status STOPPED --output json
+
+      - name: ENIs presas no security group antigo
+        run: |
+          aws ec2 describe-network-interfaces --filters Name=group-id,Values=sg-028a6208d34ea90e1 \
+            --query 'NetworkInterfaces[].{Id:NetworkInterfaceId,Status:Status,Attachment:Attachment,Description:Description}' \
+            --output json
