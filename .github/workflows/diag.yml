@@ -1,0 +1,32 @@
+name: diag
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Target health atual
+        run: |
+          TG_ARN=$(aws elbv2 describe-target-groups --names poc-mtls-keycloak-admin-tg --query 'TargetGroups[0].TargetGroupArn' --output text)
+          aws elbv2 describe-target-health --target-group-arn "$TG_ARN" --output json
+
+      - name: Service status
+        run: |
+          aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
+            --query 'services[0].{running:runningCount,desired:desiredCount,deployments:deployments[].{td:taskDefinition,status:status,rollout:rolloutState}}' \
+            --output json
+
+      - name: SG antigo ainda existe?
+        run: |
+          aws ec2 describe-security-groups --group-ids sg-028a6208d34ea90e1 --output json 2>&1 || echo "SG NAO EXISTE MAIS (deletado com sucesso)"
