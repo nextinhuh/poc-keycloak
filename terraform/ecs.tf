@@ -58,6 +58,21 @@ resource "aws_ecs_task_definition" "keycloak" {
   cpu                       = "512"
   memory                    = "1024"
   execution_role_arn        = aws_iam_role.ecs_execution.arn
+  task_role_arn             = aws_iam_role.keycloak_task.arn
+
+  volume {
+    name = "keycloak-data"
+
+    efs_volume_configuration {
+      file_system_id     = aws_efs_file_system.keycloak.id
+      transit_encryption = "ENABLED"
+
+      authorization_config {
+        access_point_id = aws_efs_access_point.keycloak.id
+        iam             = "ENABLED"
+      }
+    }
+  }
 
   container_definitions = jsonencode([
     {
@@ -65,6 +80,12 @@ resource "aws_ecs_task_definition" "keycloak" {
       image     = "${data.aws_ecr_repository.this.repository_url}:${var.image_tag}"
       essential = true
       portMappings = [{ containerPort = 8080, protocol = "tcp" }]
+
+      mountPoints = [{
+        sourceVolume  = "keycloak-data"
+        containerPath = "/opt/keycloak/data"
+      }]
+
       environment = [
         { name = "KC_BOOTSTRAP_ADMIN_USERNAME", value = "admin" },
         { name = "KC_BOOTSTRAP_ADMIN_PASSWORD", value = "admin-poc-only" },

@@ -8,15 +8,21 @@ Esta é uma POC pessoal (conta AWS pessoal do autor, fora da empresa) para valid
 2. O cliente gera um CSR local e manda `{csr, access_token}` para o step-ca, que valida o token contra o Keycloak (provisioner OIDC) e, se válido, assina o CSR e devolve um certificado x509.
 3. O cliente usa esse certificado para chamar um endpoint do backend só acessível através de um listener **mTLS** do ALB (trust store = CA raiz do step-ca).
 
-Simplificado em relação ao plano corporativo real: sem domínio próprio, sem ALB dedicado/ACM, sem banco de dados persistente, sem HA. **3 repositórios independentes**, cada um com sua própria pipeline (`.github/workflows/deploy.yml`, push na `main`): **`poc-keycloak`** (este), `poc-certificate`, `poc-backend`.
+Simplificado em relação ao plano corporativo real: sem domínio próprio, sem ALB dedicado/ACM, sem Postgres/RDS, sem HA. **3 repositórios independentes**, cada um com sua própria pipeline (`.github/workflows/deploy.yml`, push na `main`): **`poc-keycloak`** (este), `poc-certificate`, `poc-backend`.
 
 ## 2. Papel deste serviço (poc-keycloak)
 
 Tem **dois papéis** neste teste, os dois neste mesmo repositório:
 
-**a) Identity Provider da POC.** Roda em modo `start-dev` (H2 embarcado, **sem Postgres** — decisão explícita de não ter banco persistente neste teste). Importa automaticamente, no boot, o realm `poc-terminal` com dois clients já configurados (`realm-export.json`):
-- `poc-backend`: usado pelo backend Spring Boot para (a) criar usuários via Admin REST API e (b) emitir `access_token` via `direct-access-grants`.
-- `step-ca-oidc`: usado pelo provisioner OIDC do step-ca para validar o `access_token` recebido junto com o CSR.
+**a) Identity Provider da POC.** Roda em modo `start-dev` (H2 embarcado, **sem Postgres** — decisão explícita de não ter um banco relacional separado neste teste). Importa, **só na primeira execução** (ver "Persistência" abaixo), o realm `poc-terminal` com dois clients já configurados (`realm-export.json`):
+- `poc-backend`: usado pelo backend Spring Boot para (a) criar usuários-terminal via Admin REST API e (b) emitir token para eles via **OAuth2 Token Exchange** (RFC 8693) — não é `direct-access-grants`/`grant_type=password` (os terminais nunca têm senha).
+- `step-ca-oidc`: usado pelo provisioner OIDC do step-ca para validar o `id_token` recebido junto com o CSR.
+
+**Persistência (EFS) e bootstrap automático de token-exchange.** O H2 do Keycloak fica num volume EFS montado em `/opt/keycloak/data` (`terraform/efs.tf`) — sem isso, cada deploy recriava a task do zero e **apagava tudo**: usuários criados, e a configuração manual de permissões de token-exchange (bug real já vivido neste projeto). O `entrypoint.sh` decide, com base num arquivo-marcador nesse volume (`.poc-mtls-initialized`), se é a primeira execução:
+- **1ª execução** (volume vazio): sobe com `--import-realm` e, em seguida, roda `configure-token-exchange.sh` — um script que usa a Admin REST API do Keycloak pra fazer exatamente o que antes era feito na mão no console (habilitar "Permissions" no client `poc-backend` e no recurso `Users`, criar uma policy liberando o `poc-backend`, e anexá-la nas permissões `token-exchange` e `impersonate`). Grava o marcador ao final.
+- **Execuções seguintes**: sobe **sem** `--import-realm` (os dados já persistidos no EFS são usados como estão — reimportar o realm por cima de dados existentes arriscaria sobrescrever usuários/policies já criados) e **sem** rodar o script de novo.
+
+O script é idempotente (pode ser rodado de novo manualmente sem duplicar policy, caso precise depurar), e suas falhas não derrubam o container — só ficam logadas, porque o Keycloak em si precisa continuar subindo mesmo que essa configuração extra falhe.
 
 Não fica atrás do ALB — é acessado (a) para administração, via IP público da própria task, restrito ao IP do usuário; (b) pelos outros serviços (backend, step-ca), via **Cloud Map** (`keycloak.poc-mtls.local:8080`), porque o IP público muda a cada redeploy e um endereço fixo é obrigatório para não quebrar silenciosamente a integração.
 
@@ -54,9 +60,12 @@ Os outros 2 repositórios (`poc-certificate`, `poc-backend`) **não sabem nem pr
 
 ## 4. O que precisa ser implementado aqui
 
-- `Dockerfile`: `FROM quay.io/keycloak/keycloak:26.0`, copia `realm-export.json`, `ENTRYPOINT` com `start-dev --import-realm --http-enabled=true --hostname-strict=false` (sem hostname fixo, já que não há domínio).
+- `Dockerfile`: `FROM quay.io/keycloak/keycloak:26.0`, instala `curl`/`jq` (`microdnf`, imagem base UBI), copia `realm-export.json`, `master-realm-override.json`, `entrypoint.sh` e `configure-token-exchange.sh`, `ENTRYPOINT ["/entrypoint.sh"]`.
+- `entrypoint.sh`: decide `--import-realm` sim/não com base no marcador `/opt/keycloak/data/.poc-mtls-initialized`, sobe o `kc.sh start-dev` em background, roda `configure-token-exchange.sh` só na 1ª vez, e faz `wait` no processo do Keycloak (ver "Persistência" acima).
+- `configure-token-exchange.sh`: espera o Keycloak responder, pega um token de admin (`KC_BOOTSTRAP_ADMIN_USERNAME`/`PASSWORD`), habilita fine-grained permissions no client `poc-backend` e no recurso `Users`, cria a policy `poc-backend-pode-exchange` e anexa nas permissões `token-exchange` e `impersonate` — via Admin REST API (`/management/permissions`, `/users-management-permissions`, `/authz/resource-server/policy/client`, `/authz/resource-server/permission/scope/{id}`).
 - `realm-export.json`: realm `poc-terminal` + os dois clients acima, com **secrets fixos hardcoded** (é uma POC descartável, não há necessidade de gerar secrets dinâmicos via provider Terraform do Keycloak — isso evitaria uma dependência circular entre "terraform falar com o Keycloak" e "Keycloak já estar no ar"). Inclui também o service-account user de `poc-backend` com os client roles `realm-management: manage-users, view-users, query-users` (necessário pra ele poder criar usuários via Admin API).
-- `terraform/ecs.tf`: security group de admin (porta 8080, `cidr_blocks = [var.allowed_admin_cidr]`), registro no Cloud Map (`aws_service_discovery_service`), os 2 `aws_ssm_parameter` (`SecureString`) publicando os **mesmos** secrets hardcoded do `realm-export.json` (mantidos em sincronia manual — se mudar um, muda o outro), task definition + service ECS (`assign_public_ip = true`, `desired_count = 1`, circuit breaker habilitado).
+- `terraform/efs.tf`, `iam.tf`: file system + access point restrito a `/opt/keycloak/data` + task role própria (EFS IAM authorization exige uma task role separada da execution role — mesmo ajuste já feito no `poc-certificate`).
+- `terraform/ecs.tf`: volume EFS montado na task definition, security group de admin (porta 8080, `cidr_blocks = [var.allowed_admin_cidr]`), registro no Cloud Map (`aws_service_discovery_service`), os 2 `aws_ssm_parameter` (`SecureString`) publicando os **mesmos** secrets hardcoded do `realm-export.json` (mantidos em sincronia manual — se mudar um, muda o outro), task definition + service ECS (`assign_public_ip = true`, `desired_count = 1`, circuit breaker habilitado).
 - `terraform/network.tf`, `cluster.tf`, `security-groups.tf`, `service-discovery.tf`, `alb.tf`: a infraestrutura compartilhada descrita na seção 2b. O `alb.tf` tem o listener 8443 (mTLS) e o `aws_lb_trust_store` condicionados a `var.enable_mtls_listener` (`count = var.enable_mtls_listener ? 1 : 0`) — ficam desligados até a "2ª leva" (seção 6).
 - `terraform/data.tf`: só o lookup do próprio ECR repo (criado via AWS CLI na pipeline, não via `aws_ecr_repository` — evita o problema de ordem "terraform cria o repo" vs "pipeline precisa do repo antes de buildar a imagem"). Os outros recursos (VPC, subnets, cluster, ALB, SGs, Cloud Map) deixaram de ser `data` source aqui porque agora são criados neste mesmo repositório como `resource`.
 
