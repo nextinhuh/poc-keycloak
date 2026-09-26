@@ -16,26 +16,10 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: ECS service status
+      - name: Task definition atual em uso pelo service (imagem)
         run: |
-          aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
-            --query 'services[0].{status:status,desiredCount:desiredCount,runningCount:runningCount,pendingCount:pendingCount,deployments:deployments}' \
-            --output json
-
-      - name: ECS service events (ultimos 20)
-        run: |
-          aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
-            --query 'services[0].events[:20]' --output json
-
-      - name: Tasks do servico (todas, incluindo STOPPED)
-        run: |
-          echo "--- RUNNING ---"
-          aws ecs list-tasks --cluster poc-mtls-ECS --service-name poc-mtls-keycloak --desired-status RUNNING --output json
-          echo "--- STOPPED ---"
-          aws ecs list-tasks --cluster poc-mtls-ECS --service-name poc-mtls-keycloak --desired-status STOPPED --output json
-
-      - name: ENIs presas no security group antigo
-        run: |
-          aws ec2 describe-network-interfaces --filters Name=group-id,Values=sg-028a6208d34ea90e1 \
-            --query 'NetworkInterfaces[].{Id:NetworkInterfaceId,Status:Status,Attachment:Attachment,Description:Description}' \
-            --output json
+          TD_ARN=$(aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
+            --query 'services[0].taskDefinition' --output text)
+          echo "task definition: $TD_ARN"
+          aws ecs describe-task-definition --task-definition "$TD_ARN" \
+            --query 'taskDefinition.containerDefinitions[0].image' --output text
