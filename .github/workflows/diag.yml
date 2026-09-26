@@ -16,20 +16,14 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Qual task tem essa ENI (eni-0e2af6d923432dff7)
+      - name: Ultimas tasks STOPPED do keycloak (motivo da falha)
         run: |
-          aws ecs list-tasks --cluster poc-mtls-ECS --query 'taskArns' --output text | tr '\t' '\n' > /tmp/all-tasks.txt
-          cat /tmp/all-tasks.txt
-          echo "--- detalhe de cada uma ---"
-          while read -r t; do
-            [ -z "$t" ] && continue
-            aws ecs describe-tasks --cluster poc-mtls-ECS --tasks "$t" \
-              --query 'tasks[0].{taskArn:taskArn,group:group,lastStatus:lastStatus,taskDefinition:taskDefinitionArn,eni:attachments[0].details[?name==`networkInterfaceId`].value|[0]}' \
-              --output json
-          done < /tmp/all-tasks.txt
+          ARNS=$(aws ecs list-tasks --cluster poc-mtls-ECS --family poc-mtls-keycloak --desired-status STOPPED --query 'taskArns' --output text)
+          aws ecs describe-tasks --cluster poc-mtls-ECS --tasks $ARNS \
+            --query 'tasks[].{taskDef:taskDefinitionArn,stoppedAt:stoppedAt,stoppedReason:stoppedReason,containers:containers[].{reason:reason,exitCode:exitCode}}' \
+            --output json
 
-      - name: Network config atual do service keycloak
+      - name: Eventos recentes do service (ultimos 10)
         run: |
           aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
-            --query 'services[0].{taskDef:taskDefinition,networkConfig:networkConfiguration,deployments:deployments[].{td:taskDefinition,desired:desiredCount,running:runningCount,status:status}}' \
-            --output json
+            --query 'services[0].events[:10]' --output json
