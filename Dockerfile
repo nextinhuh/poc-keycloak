@@ -1,7 +1,8 @@
 FROM quay.io/keycloak/keycloak:26.0
 
+USER root
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh && chown 1000:0 /entrypoint.sh
 
 USER 1000
 
