@@ -7,25 +7,38 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  AWS_REGION: us-east-1
+  TF_STATE_BUCKET_PREFIX: poc-mtls-tfstate
+
 jobs:
   fix:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Parar a task antiga (rev 8) presa - desiredCount=0 ha mais de 1h
-        run: |
-          aws ecs stop-task --cluster poc-mtls-ECS \
-            --task 73a7270ce5de46cfaaccca0bdae21d09 \
-            --reason "orfa apos rollback do circuit breaker - limpeza manual"
+      - uses: hashicorp/setup-terraform@v3
 
-      - name: Aguardar a task parar de vez
+      - name: Resolve state bucket name
         run: |
-          aws ecs wait tasks-stopped --cluster poc-mtls-ECS --tasks 73a7270ce5de46cfaaccca0bdae21d09
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "TF_STATE_BUCKET=${TF_STATE_BUCKET_PREFIX}-${ACCOUNT_ID}" >> "$GITHUB_ENV"
 
-      - name: Confirmar que a ENI do SG antigo foi liberada
+      - name: Terraform init
+        working-directory: terraform
         run: |
-          aws ec2 describe-network-interfaces --filters Name=group-id,Values=sg-028a6208d34ea90e1 --output json
+          terraform init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=keycloak/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Listar o que ja esta no state (recursos do listener mTLS)
+        working-directory: terraform
+        run: |
+          terraform state list | grep -E "mtls|trust_store" || echo "(nenhum encontrado no state)"
