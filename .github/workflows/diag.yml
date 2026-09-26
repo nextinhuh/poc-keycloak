@@ -16,14 +16,15 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Ultimas tasks STOPPED do keycloak (motivo da falha)
+      - name: Ultimas linhas do log do container (task mais recente stopped)
         run: |
-          ARNS=$(aws ecs list-tasks --cluster poc-mtls-ECS --family poc-mtls-keycloak --desired-status STOPPED --query 'taskArns' --output text)
-          aws ecs describe-tasks --cluster poc-mtls-ECS --tasks $ARNS \
-            --query 'tasks[].{taskDef:taskDefinitionArn,stoppedAt:stoppedAt,stoppedReason:stoppedReason,containers:containers[].{reason:reason,exitCode:exitCode}}' \
-            --output json
-
-      - name: Eventos recentes do service (ultimos 10)
-        run: |
-          aws ecs describe-services --cluster poc-mtls-ECS --services poc-mtls-keycloak \
-            --query 'services[0].events[:10]' --output json
+          TASK_ID=$(aws ecs list-tasks --cluster poc-mtls-ECS --family poc-mtls-keycloak --desired-status STOPPED --query 'taskArns[-1]' --output text | awk -F/ '{print $NF}')
+          echo "task: $TASK_ID"
+          aws logs get-log-events \
+            --log-group-name /ecs/poc-mtls-keycloak \
+            --log-stream-name "keycloak/keycloak/${TASK_ID}" \
+            --limit 100 --output text --query 'events[*].message' 2>&1 || echo "stream nao encontrado com esse nome, tentando achar"
+          echo "--- streams disponiveis ---"
+          aws logs describe-log-streams --log-group-name /ecs/poc-mtls-keycloak \
+            --order-by LastEventTime --descending --limit 5 \
+            --query 'logStreams[].logStreamName' --output json
