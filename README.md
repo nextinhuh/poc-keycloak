@@ -14,7 +14,7 @@ Simplificado em relação ao plano corporativo real: sem domínio próprio, sem 
 
 Tem **dois papéis** neste teste, os dois neste mesmo repositório:
 
-**a) Identity Provider da POC.** Roda em modo `start-dev` (H2 embarcado, **sem Postgres** — decisão explícita de não ter um banco relacional separado neste teste), só com a feature `token-exchange` habilitada. Sem import automático de realm — **toda a configuração (realm `poc-terminal`, clients `poc-backend`/`step-ca-oidc`, usuários-terminal, permissões de token-exchange/impersonate) é feita manualmente pelo console admin**, depois do primeiro deploy.
+**a) Identity Provider da POC.** Roda em modo `start-dev` (H2 embarcado, **sem Postgres** — decisão explícita de não ter um banco relacional separado neste teste), com as features `token-exchange` e `admin-fine-grained-authz` habilitadas (a segunda é o que libera as abas "Permissions" no console, usadas pra configurar token-exchange/impersonate na mão). Sem import automático de realm — **toda a configuração (realm `poc-terminal`, clients `poc-backend`/`step-ca-oidc`, usuários-terminal, permissões de token-exchange/impersonate) é feita manualmente pelo console admin**, depois do primeiro deploy.
 
 **Persistência (EFS), sem automação.** O H2 do Keycloak fica num volume EFS montado em `/opt/keycloak/data` (`terraform/efs.tf`) — sem isso, cada deploy recriava a task do zero e apagava toda a configuração manual feita no console. O `entrypoint.sh` é um passthrough simples do `kc.sh start-dev`, sem lógica de "primeira execução"/marcador — a persistência é responsabilidade só do volume, não de nenhum script.
 
@@ -61,7 +61,7 @@ Os outros 2 repositórios (`poc-certificate`, `poc-backend`) **não sabem nem pr
 ## 4. O que precisa ser implementado aqui
 
 - `Dockerfile`: `FROM quay.io/keycloak/keycloak:26.0`, copia só o `entrypoint.sh`, `ENTRYPOINT ["/entrypoint.sh"]` — sem estágio de build extra, sem arquivo de import.
-- `entrypoint.sh`: passthrough do `kc.sh start-dev` (`--http-enabled=true --hostname-strict=false --features=token-exchange`), sem lógica condicional.
+- `entrypoint.sh`: passthrough do `kc.sh start-dev` (`--http-enabled=true --hostname-strict=false --features=token-exchange,admin-fine-grained-authz`), sem lógica condicional.
 - Configuração do realm `poc-terminal`, dos clients `poc-backend`/`step-ca-oidc` e das permissões de token-exchange/impersonate: **manual, pelo console admin** (não há mais `realm-export.json`/script — ver "Persistência" acima).
 - `terraform/efs.tf`, `iam.tf`: file system + access point restrito a `/opt/keycloak/data` + task role própria (EFS IAM authorization exige uma task role separada da execution role — mesmo ajuste já feito no `poc-certificate`).
 - `terraform/ecs.tf`: volume EFS montado na task definition, target group `keycloak-admin-tg` (porta 8080, health check em `/realms/master/.well-known/openid-configuration`), registro no Cloud Map (`aws_service_discovery_service`), os 2 `aws_ssm_parameter` (`SecureString`) publicando os secrets dos clients `poc-backend`/`step-ca-oidc` (mantidos em sincronia manual com os secrets configurados à mão no console — se mudar um, muda o outro), task definition + service ECS (`assign_public_ip = true` — só pra egress, já que não há NAT Gateway; ninguém acessa a task direto por esse IP, o security group só libera tráfego vindo do ALB — `desired_count = 1`, circuit breaker habilitado).

@@ -7,4 +7,4 @@ set -eu
 # O volume EFS persiste essa configuracao entre deploys.
 exec /opt/keycloak/bin/kc.sh start-dev \
   --http-enabled=true --hostname-strict=false \
-  --features=token-exchange
+  --features=token-exchange,admin-fine-grained-authz
