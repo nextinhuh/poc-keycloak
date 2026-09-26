@@ -103,6 +103,104 @@ curl -X POST "http://${ALB_DNS}:8081/realms/master/protocol/openid-connect/token
 open "http://${ALB_DNS}:8081/admin/master/console/"
 ```
 
-## 8. Fora de escopo
+## 8. Configuração manual do realm (passo a passo — replicar na empresa)
+
+Desde a mudança pra subida nativa (seção 2), **nada é criado automaticamente**: realm, clients, permissões de token-exchange/impersonate e usuários-terminal são configurados à mão, uma única vez, pelo console admin. O volume EFS persiste isso entre deploys. Este é o roteiro completo, incluindo as pegadinhas reais encontradas ao configurar (não só a teoria).
+
+### 8.1 Pré-requisito no servidor
+
+O `entrypoint.sh` precisa subir o Keycloak com **duas** feature flags (`--features=token-exchange,admin-fine-grained-authz`). Sem a segunda, as abas "Permissions" usadas no passo 8.5 **não aparecem no console** — foi preciso reverter isso durante esta POC porque a primeira tentativa subiu só com `token-exchange`.
+
+### 8.2 Criar o realm
+
+`Dropdown de realm (canto superior esquerdo) → Create Realm`
+- Nome: `poc-terminal` (é o valor fixo esperado pelos outros 2 repositórios, ver seção 3)
+
+### 8.3 Criar o client `poc-backend`
+
+`Clients → Create client`
+- **General**: Client ID = `poc-backend`
+- **Capability config**: Client authentication = **On**; marcar **Service accounts roles** e **Direct access grants**
+- Salvar
+- Aba **Credentials** → Client Secret: o console só permite **Regenerate** (não dá pra digitar um valor customizado). Duas opções:
+  - Clicar Regenerate, copiar o valor, e atualizar o SSM parameter `/poc-mtls/keycloak/backend-client-secret` (e a variável Terraform `backend_client_secret`) pra bater; ou
+  - Fixar o secret via Admin REST API direto (`PUT /admin/realms/poc-terminal/clients/{id}` com `"secret": "<valor-do-ssm>"` no corpo) — mais rápido quando o secret já está definido em outro lugar (Terraform/SSM) e só falta refletir no Keycloak.
+- Aba **Service account roles** → Assign role → filtrar por `realm-management` → marcar `manage-users`, `view-users`, `query-users` (o backend precisa disso pra criar usuários-terminal via Admin API)
+
+### 8.4 Criar o client `step-ca-oidc`
+
+`Clients → Create client`
+- Client ID = `step-ca-oidc`, Client authentication = **On**, resto default (não precisa de service account — é só um provisioner OIDC, o step-ca nunca chama `client_credentials` nele)
+- Secret: mesmo processo do passo anterior, sincronizando com `/poc-mtls/keycloak/stepca-client-secret`
+
+### 8.5 Habilitar permissões finas (fine-grained authz)
+
+Duas permissões independentes, ambas materializadas dentro do client especial `realm-management` (não importa em qual tela você liga o toggle, o resultado sempre aparece lá):
+
+1. `Clients → poc-backend → aba Advanced → seção Permissions (final da página)` → ligar **Permissions enabled**
+2. `Users (menu lateral) → aba/link Permissions no topo` → ligar **Permissions enabled**
+
+### 8.6 Criar a policy que autoriza o `poc-backend`
+
+`Clients → realm-management → aba Authorization → sub-aba Policies → Create policy → Client`
+- Name: `poc-backend-pode-exchange` (ou o nome que preferir)
+- Clients: selecionar `poc-backend`
+- Save
+
+### 8.7 Anexar a policy nas permissões certas — **atenção aos nomes**
+
+Ainda em `Clients → realm-management → Authorization → sub-aba Permissions`, existem várias permissões com nomes parecidos. As que importam:
+
+| Permissão (nome exato no console) | O que ela controla | Anexar a policy? |
+|---|---|---|
+| `token-exchange.permission.client.<uuid-do-poc-backend>` | Quem pode fazer token-exchange usando o client `poc-backend` como `subject_token` | **Sim** |
+| `admin-impersonating.permission.users` | Quem pode impersonar (virar) outro usuário via token-exchange (`requested_subject`) | **Sim** — esse é o "impersonate" de verdade |
+| `user-impersonated.permission.users` | Controla o usuário-**alvo** sendo impersonado (não quem impersona) | **Não** — é fácil confundir com o de cima pelo nome parecido; anexar a policy aqui **não resolve** o erro `Client not allowed to exchange` |
+
+Pra cada uma das duas permissões corretas: abrir → **Apply Policy**/"Associated policies" → adicionar `poc-backend-pode-exchange` → Save.
+
+> **Pegadinha real encontrada nesta POC**: da primeira vez, a policy foi anexada em `user-impersonated` em vez de `admin-impersonating` — o teste de token-exchange continuou dando `{"error":"access_denied","error_description":"Client not allowed to exchange"}` até corrigir pra permissão certa. Se você bater nesse erro depois de seguir os passos acima, é o primeiro lugar pra conferir.
+
+### 8.8 Criar os usuários-terminal
+
+Cada terminal é um usuário **sem senha** no realm. Pelo console: `Users → Add user` → Username = o serial number do terminal (ex.: `teste-001`) → Create (deixar credenciais em branco — na integração real, é o `poc-backend` quem cria isso via Admin API no fluxo de `/auth/token`, não à mão).
+
+> **Segunda pegadinha real**: o teste de token-exchange (`requested_subject=teste-001`) só funciona depois que esse usuário existe de fato no realm. Sem ele, o erro é o mesmo `access_denied`/`Client not allowed to exchange` das permissões erradas — não dá pra distinguir as duas causas só pela mensagem, então confira sempre as duas coisas (permissões do 8.7 **e** o usuário existir) antes de investigar mais fundo.
+
+### 8.9 Testar de ponta a ponta
+
+```bash
+ALB_DNS="<output alb_dns_name>"
+
+# 1. token do proprio poc-backend (client_credentials)
+BACKEND_TOKEN=$(curl -s -X POST "http://${ALB_DNS}:8081/realms/poc-terminal/protocol/openid-connect/token" \
+  -d "grant_type=client_credentials&client_id=poc-backend&client_secret=<secret>" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+
+# 2. token exchange: trocar pelo token do usuario-terminal
+curl -s -X POST "http://${ALB_DNS}:8081/realms/poc-terminal/protocol/openid-connect/token" \
+  -d "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+  -d "client_id=poc-backend" \
+  -d "client_secret=<secret>" \
+  -d "subject_token=$BACKEND_TOKEN" \
+  -d "requested_subject=teste-001" \
+  -d "scope=openid"
+```
+Esperado: `200` com `id_token`/`access_token` do usuário `teste-001`.
+
+### 8.10 Checklist rápido pra replicar na empresa
+
+- [ ] Servidor sobe com `--features=token-exchange,admin-fine-grained-authz`
+- [ ] Realm criado com o nome esperado pelos outros serviços
+- [ ] Client do backend: confidential, service account, direct access grants, roles `manage-users`/`view-users`/`query-users`
+- [ ] Client do provisioner (CA): confidential, sem service account
+- [ ] Secrets dos 2 clients sincronizados com onde quer que a infra os leia (SSM/Vault/etc.)
+- [ ] Permissions enabled: no client do backend **e** em Users
+- [ ] Policy do tipo Client, liberando o client do backend
+- [ ] Policy anexada em `token-exchange.permission.client.<uuid>` **e** em `admin-impersonating.permission.users` (não `user-impersonated`)
+- [ ] Usuário de teste criado antes de testar o token-exchange
+- [ ] Teste de ponta a ponta (8.9) retornando 200
+
+## 9. Fora de escopo
 
 Banco de dados persistente (Postgres/RDS); alta disponibilidade; secrets gerados dinamicamente/rotacionados; SSO real com domínio próprio; qualquer política de senha/MFA para o admin console (usuário `admin`/`admin` — bootstrap nativo do Keycloak, `KC_BOOTSTRAP_ADMIN_USERNAME`/`PASSWORD`, só para teste); import/configuração automática de realm (é toda manual agora, ver seção 2).
