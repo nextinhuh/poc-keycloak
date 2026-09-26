@@ -1,0 +1,48 @@
+{
+  "realm": "poc-terminal",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "poc-backend",
+      "name": "Backend da POC - cria usuarios e emite access_token",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "poc-backend-secret-CHANGE-ME-not-sensitive-test-only",
+      "serviceAccountsEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "authorizationServicesEnabled": false
+    },
+    {
+      "clientId": "step-ca-oidc",
+      "name": "Provisioner OIDC usado pelo step-ca para validar access_token",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "step-ca-oidc-secret-CHANGE-ME-not-sensitive-test-only",
+      "serviceAccountsEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "terminal" }
+    ]
+  },
+  "users": [
+    {
+      "username": "service-account-poc-backend",
+      "enabled": true,
+      "serviceAccountClientId": "poc-backend",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users", "query-users"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+terraform {
+  required_version = ">= 1.6.0"
+
+  backend "s3" {
+    # bucket/key/region passados via -backend-config na pipeline
+  }
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
