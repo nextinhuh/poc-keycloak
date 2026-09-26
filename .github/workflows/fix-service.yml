@@ -38,7 +38,8 @@ jobs:
             -backend-config="region=${AWS_REGION}" \
             -backend-config="use_lockfile=true"
 
-      - name: Listar o que ja esta no state (recursos do listener mTLS)
+      - name: Importar o listener 8443 (ja existe na AWS, faltava no state)
         working-directory: terraform
         run: |
-          terraform state list | grep -E "mtls|trust_store" || echo "(nenhum encontrado no state)"
+          terraform import 'aws_lb_listener.mtls[0]' \
+            arn:aws:elasticloadbalancing:us-east-1:273164497089:listener/app/poc-mtls-shared-alb/930aff2f68543987/4d8e98389d22b013
