@@ -173,6 +173,7 @@ Objetivo: todo terminal criado a partir daqui **já nasce** com um role de autor
 1. `Realm roles → Create role` → nome `terminal_pode`. Salvar.
 2. `Realm roles → Create role` → nome `terminal_nao_pode`. Salvar. **Não** associar esse a nada — de propósito, nenhum terminal deve ter esse role, serve pra provar que a autorização por role realmente bloqueia (ver README do `poc-backend`, endpoints `/consumer/terminal-pode/ping` e `/consumer/terminal-nao-pode/ping`).
 3. `Realm roles → default-roles-poc-terminal → aba Associated roles → Assign role` → marcar `terminal_pode`.
+4. **Passo obrigatório, fácil de esquecer**: `Client scopes → roles → aba Mappers → mapper "realm roles" → ligar "Add to ID token"` (salvar). Sem isso, o `realm_access.roles` **não aparece no ID Token**, só no `access_token`/`userinfo` — que é o comportamento padrão do Keycloak (ID Token é pensado só pra identidade, roles são tratadas como informação de autorização). Como todo o desenho deste projeto usa o **ID Token** (é o `typ:"ID"` que o step-ca exige e que o `poc-backend` chama de `accessToken`), sem esse toggle os roles nunca chegam em lugar nenhum, mesmo com os passos 1-3 certos (erro real encontrado ao validar este fluxo).
 
 Depois disso, o `id_token` de qualquer terminal **criado a partir de agora** já vem com:
 
@@ -184,7 +185,24 @@ sem `terminal_nao_pode`. Isso funciona porque o client scope `roles` (que injeta
 
 > **Pegadinha real**: isso só vale pra usuários **criados depois** dessa configuração. Terminais de teste já existentes (ex.: `pos-teste-001`, `teste-001`) não ganham `terminal_pode` retroativamente. Pra testar o fluxo de roles, use um serial number novo, ou atribua manualmente (`Users → <usuário> → Role mapping → Assign role → terminal_pode`).
 
-### 8.10 Testar de ponta a ponta
+### 8.10 Runbook: autorizando um novo microsserviço a validar esse token
+
+Contexto: o `poc-backend` valida `aud` explicitamente (`SecurityConfig.jwtDecoder`, `withAudience`) — só aceita token com `aud` contendo `step-ca-oidc`. Isso é **defesa em profundidade de propósito**: garante que um token emitido pra uma finalidade (autenticar terminal contra o step-ca) não sirva de credencial válida em qualquer outro serviço só porque foi assinado pelo mesmo Keycloak. Sem essa checagem, qualquer serviço que só confira `iss`+assinatura aceitaria esse token, mesmo não sendo o destinatário pretendido.
+
+Toda vez que um novo microsserviço (fora deste projeto, ex.: um serviço real da empresa) precisar validar esse mesmo tipo de token e aplicar a mesma checagem de `aud`, ele **não vai aceitar por padrão** — o `aud` só carrega o client que originou o login (`step-ca-oidc`). É preciso autorizar esse serviço explicitamente, adicionando-o como audiência extra:
+
+1. Garanta que o novo microsserviço já existe como **client** neste mesmo realm (`poc-terminal`) — o mapper de audiência escolhe entre clients já cadastrados aqui (ou uma string livre, se o consumidor não for um client Keycloak, ver passo 3).
+2. `Clients → step-ca-oidc → aba Client scopes → Dedicated scopes → sub-aba Mappers → Add mapper → By configuration → Audience`.
+3. Preencher:
+   - **Name**: descritivo, ex. `audience-<nome-do-servico>`.
+   - **Included Client Audience**: selecionar o client do novo microsserviço (se ele existir como client no realm); **ou** **Included Custom Audience**: uma string livre, se o consumidor não for um client Keycloak (ex.: uma API externa que só confia no `iss`).
+   - **Add to ID token**: **On** (é o ID Token que está sendo validado, mesma pegadinha da seção 8.9).
+4. Salvar. A partir do próximo `id_token` emitido, o `aud` deixa de ser uma string única e vira uma lista: `"aud": ["step-ca-oidc", "<novo-serviço>"]`.
+5. No novo microsserviço, a checagem de audiência confere só a própria presença na lista (ex., em Spring: `jwt.getAudience().contains("<novo-serviço>")`) — não precisa (e não deve) exigir a lista inteira.
+
+> **Isso é por serviço, não genérico.** Cada microsserviço novo que precisar validar esse token exige seu próprio mapper de audiência (um a mais na lista) — de propósito, pra que cada serviço seja autorizado explicitamente a aceitar esse tipo de credencial, em vez de "qualquer client do realm aceita qualquer token do realm".
+
+### 8.11 Testar de ponta a ponta
 
 ```bash
 ALB_DNS="<output alb_dns_name>"
@@ -195,7 +213,7 @@ curl -X POST "http://${ALB_DNS}/auth/token" \
 ```
 Esperado: `200` com `{"accessToken": "eyJ..."}`. Decodifique o JWT (payload, base64) e confira `"typ":"ID"` e `"aud":"step-ca-oidc"` — se vier `"typ":"Bearer"`/`"aud":"account"`, algo no client `step-ca-oidc` (Direct Access Grants desligado) ou na senha do usuário está errado.
 
-### 8.11 Checklist rápido pra replicar na empresa
+### 8.12 Checklist rápido pra replicar na empresa
 
 - [ ] Servidor sobe com `--features=admin-fine-grained-authz`
 - [ ] Realm criado com o nome esperado pelos outros serviços
@@ -205,8 +223,9 @@ Esperado: `200` com `{"accessToken": "eyJ..."}`. Decodifique o JWT (payload, bas
 - [ ] Permissions enabled em Users
 - [ ] Policy do tipo Client, liberando o client do backend
 - [ ] Policy anexada em `view.permission.users` **e** `manage.permission.users`
-- [ ] Roles `terminal_pode`/`terminal_nao_pode` criadas, `terminal_pode` associado ao `default-roles-<realm>` (seção 8.9)
-- [ ] Teste de ponta a ponta (8.10) retornando 200 com um `id_token` (`typ=ID`, `aud=step-ca-oidc`)
+- [ ] Roles `terminal_pode`/`terminal_nao_pode` criadas, `terminal_pode` associado ao `default-roles-<realm>`, e **"Add to ID token" ligado no mapper `realm roles`** do client scope `roles` (seção 8.9)
+- [ ] Para cada microsserviço novo que valide `aud`: mapper de Audience configurado no `step-ca-oidc` incluindo esse serviço (seção 8.10)
+- [ ] Teste de ponta a ponta (8.11) retornando 200 com um `id_token` (`typ=ID`, `aud=step-ca-oidc`)
 
 ## 9. Fora de escopo
 
