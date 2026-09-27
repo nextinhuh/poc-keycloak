@@ -166,7 +166,25 @@ Pra cada uma: abrir → **Apply Policy**/"Associated policies" → adicionar `po
 
 Diferente de antes, **não crie usuários-terminal manualmente** — o `poc-backend` faz isso sozinho na primeira chamada de `/auth/token` pra um serial number novo (com `firstName`/`lastName`/`email` mock e senha derivada, ver README do `poc-backend`). Se quiser inspecionar, o usuário aparece em `Users` com username = serial number depois da primeira chamada.
 
-### 8.9 Testar de ponta a ponta
+### 8.9 Roles automáticas por realm (`terminal_pode` / `terminal_nao_pode`)
+
+Objetivo: todo terminal criado a partir daqui **já nasce** com um role de autorização no token, sem o `poc-backend` precisar atribuir nada na criação do usuário. Isso usa o **default role** do realm — um composite role (`default-roles-<nome-do-realm>`) que o Keycloak atribui automaticamente a **todo usuário novo**, não importa como ele foi criado (console, self-registration, ou a Admin REST API que o `poc-backend` já usa).
+
+1. `Realm roles → Create role` → nome `terminal_pode`. Salvar.
+2. `Realm roles → Create role` → nome `terminal_nao_pode`. Salvar. **Não** associar esse a nada — de propósito, nenhum terminal deve ter esse role, serve pra provar que a autorização por role realmente bloqueia (ver README do `poc-backend`, endpoints `/consumer/terminal-pode/ping` e `/consumer/terminal-nao-pode/ping`).
+3. `Realm roles → default-roles-poc-terminal → aba Associated roles → Assign role` → marcar `terminal_pode`.
+
+Depois disso, o `id_token` de qualquer terminal **criado a partir de agora** já vem com:
+
+```json
+"realm_access": { "roles": ["terminal_pode", "offline_access", "uma_authorization", ...] }
+```
+
+sem `terminal_nao_pode`. Isso funciona porque o client scope `roles` (que injeta `realm_access.roles` no token) já é padrão em qualquer client, incluindo o `step-ca-oidc` — não precisa mudar `scope=openid` no request de login.
+
+> **Pegadinha real**: isso só vale pra usuários **criados depois** dessa configuração. Terminais de teste já existentes (ex.: `pos-teste-001`, `teste-001`) não ganham `terminal_pode` retroativamente. Pra testar o fluxo de roles, use um serial number novo, ou atribua manualmente (`Users → <usuário> → Role mapping → Assign role → terminal_pode`).
+
+### 8.10 Testar de ponta a ponta
 
 ```bash
 ALB_DNS="<output alb_dns_name>"
@@ -177,7 +195,7 @@ curl -X POST "http://${ALB_DNS}/auth/token" \
 ```
 Esperado: `200` com `{"accessToken": "eyJ..."}`. Decodifique o JWT (payload, base64) e confira `"typ":"ID"` e `"aud":"step-ca-oidc"` — se vier `"typ":"Bearer"`/`"aud":"account"`, algo no client `step-ca-oidc` (Direct Access Grants desligado) ou na senha do usuário está errado.
 
-### 8.10 Checklist rápido pra replicar na empresa
+### 8.11 Checklist rápido pra replicar na empresa
 
 - [ ] Servidor sobe com `--features=admin-fine-grained-authz`
 - [ ] Realm criado com o nome esperado pelos outros serviços
@@ -187,7 +205,8 @@ Esperado: `200` com `{"accessToken": "eyJ..."}`. Decodifique o JWT (payload, bas
 - [ ] Permissions enabled em Users
 - [ ] Policy do tipo Client, liberando o client do backend
 - [ ] Policy anexada em `view.permission.users` **e** `manage.permission.users`
-- [ ] Teste de ponta a ponta (8.9) retornando 200 com um `id_token` (`typ=ID`, `aud=step-ca-oidc`)
+- [ ] Roles `terminal_pode`/`terminal_nao_pode` criadas, `terminal_pode` associado ao `default-roles-<realm>` (seção 8.9)
+- [ ] Teste de ponta a ponta (8.10) retornando 200 com um `id_token` (`typ=ID`, `aud=step-ca-oidc`)
 
 ## 9. Fora de escopo
 
